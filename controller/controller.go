@@ -17,7 +17,7 @@ import (
 	// "crypto/tls" https://api.covid19india.org/csv/latest/state_wise.csv
 )
 
-var api_key = "zsp3TNmi5psezO8Mo29ejcN2O78VN_GHbkOpvFFa93I"
+var api_key = "ADD_API_KEY"
 
 
 func process(s string) (result string) {
