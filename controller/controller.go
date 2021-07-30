@@ -14,10 +14,13 @@ import (
 	"strings"
 	"encoding/json"
 	"InshortsAssignment/models"
+	"InshortsAssignment/cache"
+	"github.com/go-redis/redis/v8"
+	"time"
 	// "crypto/tls" https://api.covid19india.org/csv/latest/state_wise.csv
 )
 
-var api_key = "ADD_API_KEY"
+var api_key = "rhaqcJgeUGWkp4-FIWHcW1oDi89-XCtBssg5Nzdy68Y"
 
 
 func process(s string) (result string) {
@@ -35,7 +38,11 @@ func process(s string) (result string) {
 	return 
 }
 
-func GetIssuesByCode(code string) models.Entry {
+
+
+
+
+func GetIssuesByCode(code string, myCache *redis.Client) models.Entry {
 	filter := bson.D{{Key: "state", Value: code}}
 	client, err := mongo.NewClient(options.Client().ApplyURI("mongodb://localhost:27017"))
 	 if err != nil {
@@ -63,10 +70,18 @@ func GetIssuesByCode(code string) models.Entry {
 		log.Fatal(err)
 	}
 	cur.Close(context.Background())
+
+	// Add to Cache
+	err = cache.Set(myCache,code, elem, 30*time.Minute)
+	if err != nil {
+		log.Fatal(err)
+	}	
+
 	return elem
 }
 
 func Getstatefromlatilongi(c echo.Context) error {
+	myCache := cache.InitRedisCache()
 	latitudeval := c.FormValue("latitude")
 	longitudeval := c.FormValue("longitude")
 
@@ -74,7 +89,7 @@ func Getstatefromlatilongi(c echo.Context) error {
 	baseUrl := "https://revgeocode.search.hereapi.com/v1/revgeocode?apiKey="
 	req := "&at=" + "" +string(latitudeval)+","+string(longitudeval)+""
 	final_req := baseUrl + api_key + req
-
+	//log.Printf(final_req)
 	resp, err := http.Get(final_req)
 	if err != nil {
 		log.Fatalln(err)
@@ -94,9 +109,28 @@ func Getstatefromlatilongi(c echo.Context) error {
 	 
 	if(strings.Compare(myCountry, "India")==0)	{
 		log.Printf(myState)
-		
-		ans:= GetIssuesByCode(myState)
-		total := GetIssuesByCode("Total")
+				
+		// Check Cache
+
+		res,err := cache.Get(myCache,myState)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if res != nil {
+			// cache exist
+			var result models.Entry
+
+			err := json.Unmarshal(res, &result)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			return c.String(http.StatusOK, "State is "+result.State+ ", Active Cases are "+result.Cases+", Last Updated Time is "+result.Last_Updated+" Hit from Cache ")	
+		}
+
+		ans:= GetIssuesByCode(myState,myCache)
+		total := GetIssuesByCode("Total",myCache)
 		return c.String(http.StatusOK, "State is "+ans.State+ ", Active Cases are "+ans.Cases+", Last Updated Time is "+ans.Last_Updated + ",  Total Active Cases in India are "+total.Cases+", Last Updated Time for Total Indian Cases is "+total.Last_Updated)	
 	} else	{
 		log.Printf("error")
@@ -114,6 +148,11 @@ func Getstatefromlatilongi(c echo.Context) error {
 }
 
 func Updatemongodb(c echo.Context) error {
+	myCache := cache.InitRedisCache()
+	err1 := cache.FlushDB(myCache)
+	if err1 != nil {
+		log.Fatal(err1)
+	}	
 	response, err := http.Get("https://api.covid19india.org/csv/latest/state_wise.csv")
 
 	if err != nil {
